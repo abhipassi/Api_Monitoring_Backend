@@ -106,3 +106,123 @@ export const passwordChangedEmail = ({ name }) => {
 
   return { subject, text, html };
 };
+
+const formatDuration = (ms) => {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
+
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  const parts = [];
+  if (days) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  if (hours) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
+  if (minutes && !days) parts.push(`${minutes} minute${minutes === 1 ? "" : "s"}`);
+  return parts.join(" ");
+};
+
+// Times are shown in UTC because the account has no timezone setting yet
+const formatTime = (date) => `${new Date(date).toUTCString().replace("GMT", "UTC")}`;
+
+const describeCause = (cause = {}) => {
+  if (cause.message) return cause.message;
+  if (cause.errorType) return cause.errorType;
+  return "The check failed";
+};
+
+const alertRow = (label, value) => `
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#6b7280;vertical-align:top">${label}</td>
+        <td style="padding:6px 0">${value}</td>
+      </tr>`;
+
+// Sent when a monitor has failed several checks in a row
+export const incidentOpenedEmail = ({ name, incident }) => {
+  const appName = process.env.APP_NAME || "API Monitoring";
+  const dashboardUrl = process.env.FRONTEND_URL;
+  const cause = describeCause(incident.cause);
+
+  const subject = `[DOWN] ${incident.monitorName} is not responding`;
+
+  const text = [
+    `Hi ${name},`,
+    "",
+    `Your monitor "${incident.monitorName}" has failed ${incident.failureCount} checks in a row.`,
+    "",
+    `URL: ${incident.monitorUrl}`,
+    `Problem: ${cause}`,
+    `Down since: ${formatTime(incident.startedAt)}`,
+    dashboardUrl ? `Dashboard: ${dashboardUrl}` : "",
+    "",
+    "We'll email you again when it responds normally.",
+    `- ${appName}`,
+  ]
+    .filter((line, i, arr) => line !== "" || arr[i - 1] !== "")
+    .join("\n");
+
+  const html = `
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="margin:0 0 16px;color:#b91c1c">${escapeHtml(incident.monitorName)} is down</h2>
+    <p>Hi ${escapeHtml(name)},</p>
+    <p>Your monitor has failed ${escapeHtml(incident.failureCount)} checks in a row.</p>
+    <table style="border-collapse:collapse;margin:16px 0">
+      ${alertRow("URL", escapeHtml(incident.monitorUrl))}
+      ${alertRow("Problem", escapeHtml(cause))}
+      ${alertRow("Down since", escapeHtml(formatTime(incident.startedAt)))}
+    </table>
+    ${
+      dashboardUrl
+        ? `<p><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px">Open dashboard</a></p>`
+        : ""
+    }
+    <p style="color:#6b7280;font-size:13px">We'll email you again when it responds normally.</p>
+  </div>`;
+
+  return { subject, text, html };
+};
+
+// Sent when a monitor that was down passes a check again
+export const incidentResolvedEmail = ({ name, incident }) => {
+  const appName = process.env.APP_NAME || "API Monitoring";
+  const dashboardUrl = process.env.FRONTEND_URL;
+  const downtime = formatDuration(new Date(incident.resolvedAt) - new Date(incident.startedAt));
+
+  const subject = `[RECOVERED] ${incident.monitorName} is back up`;
+
+  const text = [
+    `Hi ${name},`,
+    "",
+    `Your monitor "${incident.monitorName}" is responding normally again.`,
+    "",
+    `URL: ${incident.monitorUrl}`,
+    `Down since: ${formatTime(incident.startedAt)}`,
+    `Back up at: ${formatTime(incident.resolvedAt)}`,
+    `Total downtime: ${downtime}`,
+    dashboardUrl ? `Dashboard: ${dashboardUrl}` : "",
+    "",
+    `- ${appName}`,
+  ]
+    .filter((line, i, arr) => line !== "" || arr[i - 1] !== "")
+    .join("\n");
+
+  const html = `
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="margin:0 0 16px;color:#15803d">${escapeHtml(incident.monitorName)} is back up</h2>
+    <p>Hi ${escapeHtml(name)},</p>
+    <p>Your monitor is responding normally again.</p>
+    <table style="border-collapse:collapse;margin:16px 0">
+      ${alertRow("URL", escapeHtml(incident.monitorUrl))}
+      ${alertRow("Down since", escapeHtml(formatTime(incident.startedAt)))}
+      ${alertRow("Back up at", escapeHtml(formatTime(incident.resolvedAt)))}
+      ${alertRow("Total downtime", `<strong>${escapeHtml(downtime)}</strong>`)}
+    </table>
+    ${
+      dashboardUrl
+        ? `<p><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px">Open dashboard</a></p>`
+        : ""
+    }
+  </div>`;
+
+  return { subject, text, html };
+};

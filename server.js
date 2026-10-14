@@ -7,8 +7,15 @@ import helmet from "helmet";
 
 import { errorHandler, notFound } from "./src/Middlewares/error.middleware.js";
 import connectDB from "./config/db.js";
+import routes from "./src/Routes/index.js";
 
 const app = express();
+
+// Behind a reverse proxy / load balancer, set TRUST_PROXY to the number of proxies
+// in front of the app so req.ip (used by rate limiting) is the real client IP.
+if (process.env.TRUST_PROXY) {
+    app.set("trust proxy", Number(process.env.TRUST_PROXY));
+}
 const PORT = process.env.PORT || 3004;
 
 
@@ -33,6 +40,9 @@ app.get("/health-check", (req, res) => {
         environment: process.env.NODE_ENV,
     });
 });
+
+
+app.use("/api", routes);
 
 
 app.use(notFound);

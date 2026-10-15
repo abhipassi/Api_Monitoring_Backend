@@ -42,13 +42,16 @@ const REALMS = {
 const hashResetToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
 
+// Also served to the website through GET /api/meta, so the form and the server agree
+export const MIN_PASSWORD_LENGTH = 8
+
 // Returns an error message, or null if the password is acceptable
 const validateNewPassword = (password) => {
   if (typeof password !== "string" || !password) {
     return "New password is required";
   }
-  if (password.length < 8) {
-    return "New password must be at least 8 characters";
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `New password must be at least ${MIN_PASSWORD_LENGTH} characters`;
   }
   // bcrypt ignores everything after 72 bytes
   if (Buffer.byteLength(password, "utf8") > 72) {

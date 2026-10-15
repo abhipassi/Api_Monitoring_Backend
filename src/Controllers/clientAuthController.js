@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
 import Client from "../Models/clients.js";
@@ -9,8 +8,6 @@ import sendEmail from "../utils/sendEmail.js";
 import { accountCredentialsEmail } from "../utils/emailTemplates.js";
 
 export const clientRegister = async (req, res, next) => {
-  const session = await mongoose.startSession();
-
   try {
     const { name, email, companyName } = req.body;
 
@@ -44,33 +41,36 @@ export const clientRegister = async (req, res, next) => {
     let client;
     let clientUser;
 
-    await session.withTransaction(async () => {
-      [client] = await Client.create(
-        [
-          {
-            name: name.trim(),
-            email: normalizedEmail,
-            companyName: companyName.trim(),
-          },
-        ],
-        { session }
-      );
+    // Two inserts without a transaction (so a standalone MongoDB works): if the second fails,
+    // the first is removed again
+    try {
+      client = await Client.create({
+        name: name.trim(),
+        email: normalizedEmail,
+        companyName: companyName.trim(),
+      });
 
-      [clientUser] = await ClientUser.create(
-        [
-          {
-            clientId: client._id,
-            name: name.trim(),
-            email: normalizedEmail,
-            passwordHash,
-            role: "OWNER",
-            status: "ACTIVE",
-            mustChangePassword: true,
-          },
-        ],
-        { session }
-      );
-    });
+      clientUser = await ClientUser.create({
+        clientId: client._id,
+        name: name.trim(),
+        email: normalizedEmail,
+        passwordHash,
+        role: "OWNER",
+        status: "ACTIVE",
+        mustChangePassword: true,
+      });
+    } catch (createError) {
+      if (client) await Client.deleteOne({ _id: client._id });
+
+      // Two sign-ups with the same email at the same moment: the unique index lets one through
+      if (createError.code === 11000) {
+        return res.status(409).json({
+          success: false,
+          message: "An account with this email already exists",
+        });
+      }
+      throw createError;
+    }
 
     try {
       await sendEmail({
@@ -113,8 +113,6 @@ export const clientRegister = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
-  } finally {
-    await session.endSession();
   }
 };
 

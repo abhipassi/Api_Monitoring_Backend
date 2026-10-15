@@ -136,3 +136,27 @@ export const requireRole = (...roles) => (req, res, next) => {
     message: "Access denied",
   });
 };
+
+// Use after protect("admin"). SUPER_ADMIN always passes; STAFF needs every listed permission
+// (see config/permissions.js).
+export const requirePermission = (...permissions) => (req, res, next) => {
+  if (req.user?.role === "SUPER_ADMIN") return next();
+
+  const granted = req.user?.permissions ?? [];
+  if (permissions.every((p) => granted.includes(p))) return next();
+
+  return res.status(403).json({
+    success: false,
+    message: "You don't have permission to do this",
+  });
+};
+
+// Use after protect("client"). Roles are OWNER and MEMBER.
+export const requireClientRole = (...roles) => (req, res, next) => {
+  if (roles.includes(req.user?.role)) return next();
+
+  return res.status(403).json({
+    success: false,
+    message: "Only an account owner can do this",
+  });
+};

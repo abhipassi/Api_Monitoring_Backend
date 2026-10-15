@@ -13,11 +13,13 @@ const clientUserSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // Unique across all clients: login looks a user up by email alone
     email: {
       type: String,
       required: true,
       lowercase: true,
       trim: true,
+      unique: true,
     },
     passwordHash: {
       type: String,

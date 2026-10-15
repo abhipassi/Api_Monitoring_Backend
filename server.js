@@ -23,11 +23,18 @@ const PORT = process.env.PORT || 3004;
 app.use(helmet());
 
 
-app.use(
-    cors({
-        origin: process.env.FRONTEND_URL,
-    })
-);
+// A browser sends its origin as scheme://host:port with no path or trailing slash, so FRONTEND_URL is
+// reduced to that form before the comparison (a stray slash or "http:host" would otherwise block every request)
+const corsOrigin = (() => {
+    try {
+        return new URL(process.env.FRONTEND_URL).origin;
+    } catch {
+        console.warn("FRONTEND_URL is not a valid URL; cross-origin requests will be blocked");
+        return false;
+    }
+})();
+
+app.use(cors({ origin: corsOrigin }));
 
 
 app.use(express.json({ limit: "1mb" }));

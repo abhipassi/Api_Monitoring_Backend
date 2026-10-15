@@ -11,6 +11,20 @@ import {
 // Response bodies are only read to time the request; stop after this many bytes
 const MAX_BODY_BYTES = 1024 * 1024;
 
+// Every value runCheck can report as error.type; the website reads this to label them
+export const CHECK_ERROR_TYPES = [
+  "UNEXPECTED_STATUS",
+  "TIMEOUT",
+  "CONNECTION_REFUSED",
+  "CONNECTION_RESET",
+  "DNS_ERROR",
+  "TLS_ERROR",
+  "UNREACHABLE",
+  "BLOCKED_ADDRESS",
+  "INVALID_URL",
+  "NETWORK_ERROR",
+];
+
 const TLS_ERROR_CODES = new Set([
   "CERT_HAS_EXPIRED",
   "CERT_NOT_YET_VALID",

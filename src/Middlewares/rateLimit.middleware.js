@@ -8,6 +8,8 @@ const tooManyRequests = (message) => (req, res) =>
 const baseOptions = {
   standardHeaders: "draft-7", // RateLimit-* headers, plus Retry-After when blocked
   legacyHeaders: false,
+  // Automated tests make far more requests than a person would. Never set NODE_ENV=test in production.
+  skip: () => process.env.NODE_ENV === "test",
 };
 
 // Client IP plus the email being targeted, so one attacker can't hammer a single
@@ -98,4 +100,24 @@ export const changePasswordLimiter = rateLimit({
   handler: tooManyRequests(
     "Too many attempts. Please try again in 15 minutes."
   ),
+});
+
+// For routes behind login: counted per signed-in user instead of per IP
+const userKey = (req) => String(req.user?.id ?? ipKeyGenerator(req.ip));
+
+// Each call sends an email
+export const teamEmailLimiter = rateLimit({
+  ...baseOptions,
+  windowMs: 60 * MINUTE,
+  limit: 20,
+  keyGenerator: userKey,
+  handler: tooManyRequests("Too many team invitations. Please try again later."),
+});
+
+export const planRequestLimiter = rateLimit({
+  ...baseOptions,
+  windowMs: 60 * MINUTE,
+  limit: 5,
+  keyGenerator: userKey,
+  handler: tooManyRequests("Too many plan requests. Please try again later."),
 });

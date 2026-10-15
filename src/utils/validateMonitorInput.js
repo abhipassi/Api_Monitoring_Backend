@@ -2,7 +2,10 @@ import { HTTP_METHODS } from "../Models/Monitor.js";
 import { MAX_INTERVAL_SECONDS } from "../../config/plans.js";
 import { validateMonitorUrl } from "./validateMonitorUrl.js";
 
-const MAX_HEADERS = 20;
+export const MAX_HEADERS = 20;
+export const MAX_NAME_LENGTH = 100;
+export const MAX_BODY_LENGTH = 10000;
+export const MAX_URL_LENGTH = 2048;
 const HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 // Set by the HTTP client itself; letting users override them breaks requests or enables smuggling
 const FORBIDDEN_HEADERS = new Set([

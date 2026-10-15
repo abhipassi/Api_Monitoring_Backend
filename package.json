@@ -9,7 +9,8 @@
     "dev": "nodemon server.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "worker": "node worker.js",
-    "worker:dev": "nodemon worker.js"
+    "worker:dev": "nodemon worker.js",
+    "test": "node --test --test-concurrency=1 --test-timeout=180000 tests/*.test.js"
   },
   "keywords": [],
   "author": "",

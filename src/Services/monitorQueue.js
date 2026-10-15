@@ -85,7 +85,7 @@ const REDIS_CALL_TIMEOUT_MS = 3000;
 
 // BullMQ waits for a lost Redis connection forever, which would hang the API request.
 // Fail at once when Redis isn't connected, and cap how long a single call may take.
-const callRedis = (fn) => {
+const callRedis = (fn, timeoutMs = REDIS_CALL_TIMEOUT_MS) => {
   getQueue();
   if (queueConnection.status !== "ready") {
     return Promise.reject(new Error("Redis is not connected"));
@@ -93,7 +93,7 @@ const callRedis = (fn) => {
 
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error("Redis call timed out")), REDIS_CALL_TIMEOUT_MS);
+    timer = setTimeout(() => reject(new Error("Redis call timed out")), timeoutMs);
   });
   return Promise.race([fn(), timeout]).finally(() => clearTimeout(timer));
 };
@@ -167,4 +167,32 @@ export const reconcileSchedules = async () => {
     updated: toUpsert.filter(([, , wasThere]) => wasThere).length,
     removed: toRemove.length,
   };
+};
+
+// After staff change a client's plan or suspend/restore it: update that client's schedules now
+// instead of waiting for the next reconcile pass. Redis being down is logged, not fatal.
+export const resyncClientSchedules = async (clientId) => {
+  try {
+    const client = await Client.findById(clientId).select("plan status").lean();
+    const monitors = await Monitor.find({ clientId }).select("clientId intervalSeconds status").lean();
+
+    await callRedis(async () => {
+      const q = getQueue();
+      await inChunks(monitors, 50, async (monitor) => {
+        const id = String(monitor._id);
+        if (!client || client.status !== "ACTIVE" || monitor.status !== "ACTIVE") {
+          await q.removeJobScheduler(id);
+          return;
+        }
+        const every = effectiveIntervalSeconds(monitor, client.plan) * 1000;
+        const existing = await q.getJobScheduler(id);
+        // Leave correct schedulers alone so their timing isn't disturbed
+        if (existing?.every !== every) await scheduleMonitor(monitor, client.plan);
+      });
+    }, 60 * 1000); // a client can have hundreds of monitors
+    return true;
+  } catch (error) {
+    console.error(`Could not resync schedules for client ${clientId}:`, error.message);
+    return false;
+  }
 };

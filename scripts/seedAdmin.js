@@ -69,7 +69,7 @@ const main = async () => {
     }
 
     const password = generatePassword();
-
+    console.log(password,'this is the password')
     const admin = await Employees.create({
         name,
         email,

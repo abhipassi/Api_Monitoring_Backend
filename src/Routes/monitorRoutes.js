@@ -7,6 +7,7 @@ import {
     deleteMonitor,
     listMonitorResults,
 } from '../Controllers/monitorController.js'
+import { getMonitorStats, getMonitorChart } from '../Controllers/statsController.js'
 import { protect } from '../Middlewares/auth.middleware.js'
 
 const router = express.Router()
@@ -18,6 +19,8 @@ router.post('/', createMonitor)
 router.get('/', listMonitors)
 router.get('/:id', getMonitor)
 router.get('/:id/results', listMonitorResults)
+router.get('/:id/stats', getMonitorStats)
+router.get('/:id/chart', getMonitorChart)
 router.patch('/:id', updateMonitor)
 router.delete('/:id', deleteMonitor)
 

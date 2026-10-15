@@ -6,8 +6,7 @@ import { removeMonitorSchedule, syncMonitorSchedule } from "../Services/monitorQ
 import { closeOpenIncident, deleteIncidentsForMonitor } from "../Services/incidentService.js";
 import { getPlanLimits } from "../../config/plans.js";
 import { validateMonitorInput } from "../utils/validateMonitorInput.js";
-
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+import { pageParams, paginationOf, searchPattern } from "../utils/listing.js";
 
 const toMonitorResponse = (monitor) => ({
   id: monitor._id,
@@ -107,8 +106,7 @@ export const listMonitors = async (req, res, next) => {
   try {
     const { clientId } = req.user;
 
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const { page, limit } = pageParams(req.query);
 
     const filter = { clientId };
 
@@ -121,7 +119,7 @@ export const listMonitors = async (req, res, next) => {
     }
 
     if (typeof req.query.search === "string" && req.query.search.trim()) {
-      const pattern = new RegExp(escapeRegex(req.query.search.trim().slice(0, 100)), "i");
+      const pattern = searchPattern(req.query.search);
       filter.$or = [{ name: pattern }, { url: pattern }];
     }
 
@@ -138,7 +136,7 @@ export const listMonitors = async (req, res, next) => {
       success: true,
       message: "Monitors fetched",
       monitors: monitors.map(toMonitorResponse),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: paginationOf(page, limit, total),
       usage: toUsage(req.client, used),
     });
   } catch (error) {

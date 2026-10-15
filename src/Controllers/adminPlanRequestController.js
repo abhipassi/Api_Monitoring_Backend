@@ -6,17 +6,17 @@ import PlanRequest from "../Models/PlanRequest.js";
 import { planChangeWarnings, planName } from "../Services/planService.js";
 import { recordAudit } from "../Services/auditService.js";
 import { resyncClientSchedules } from "../Services/monitorQueue.js";
-import sendEmail from "../utils/sendEmail.js";
+import { sendEmailToEach } from "../utils/sendEmail.js";
 import { planRequestDecidedEmail } from "../utils/emailTemplates.js";
 import { toPlanRequestResponse } from "./billingController.js";
+import { badRequest } from "../utils/respond.js";
+import { pageParams, paginationOf } from "../utils/listing.js";
 
 const STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELED"];
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
 
 export const listPlanRequests = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const { page, limit } = pageParams(req.query);
     const filter = {};
 
     if (req.query.status) {
@@ -38,7 +38,7 @@ export const listPlanRequests = async (req, res, next) => {
       success: true,
       message: "Plan requests fetched",
       requests: requests.map(toPlanRequestResponse),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: paginationOf(page, limit, total),
       pendingCount: pending,
     });
   } catch (error) {
@@ -108,21 +108,18 @@ const decide = (approved) => async (req, res, next) => {
     });
 
     const owners = await ClientUser.find({ clientId: request.clientId, role: "OWNER", status: "ACTIVE" }).select("name email").lean();
-    const outcomes = await Promise.allSettled(
-      owners.map((owner) =>
-        sendEmail({
-          to: owner.email,
-          ...planRequestDecidedEmail({
-            name: owner.name,
-            request,
-            approved,
-            fromPlanName: planName(request.fromPlan),
-            toPlanName: planName(request.toPlan),
-          }),
-        })
-      )
+    await sendEmailToEach(
+      owners,
+      (owner) =>
+        planRequestDecidedEmail({
+          name: owner.name,
+          request,
+          approved,
+          fromPlanName: planName(request.fromPlan),
+          toPlanName: planName(request.toPlan),
+        }),
+      "Plan decision email failed"
     );
-    outcomes.forEach((o) => o.status === "rejected" && console.error("Plan decision email failed:", o.reason?.message));
 
     return res.status(200).json({
       success: true,

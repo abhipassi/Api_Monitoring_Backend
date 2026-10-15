@@ -13,10 +13,9 @@ import {
 } from "../../config/plans.js";
 import { getBillingProvider } from "../Services/billing/index.js";
 import { getUsage, planChangeWarnings, planName } from "../Services/planService.js";
-import sendEmail from "../utils/sendEmail.js";
+import { sendEmailToEach } from "../utils/sendEmail.js";
 import { planRequestReceivedEmail } from "../utils/emailTemplates.js";
-
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
+import { badRequest } from "../utils/respond.js";
 
 export const toPlanRequestResponse = (r) => ({
   id: r._id,
@@ -44,6 +43,7 @@ export const getBilling = async (req, res, next) => {
       PlanRequest.find({ clientId: client._id }).sort({ createdAt: -1 }).limit(10).lean(),
     ]);
     const current = getPlanCatalog().find((p) => p.key === client.plan);
+    const pending = requests.find((r) => r.status === "PENDING");
 
     return res.status(200).json({
       success: true,
@@ -60,7 +60,7 @@ export const getBilling = async (req, res, next) => {
         paymentsEnabled: provider.enabled,
         currency: getBillingCurrency(),
         pricesAreSample: pricesAreSample(),
-        pendingRequest: requests.find((r) => r.status === "PENDING") ? toPlanRequestResponse(requests.find((r) => r.status === "PENDING")) : null,
+        pendingRequest: pending ? toPlanRequestResponse(pending) : null,
         recentRequests: requests.map(toPlanRequestResponse),
       },
     });
@@ -120,20 +120,17 @@ export const createPlanRequest = async (req, res, next) => {
     }
 
     const recipients = await staffRecipients();
-    const outcomes = await Promise.allSettled(
-      recipients.map((person) =>
-        sendEmail({
-          to: person.email,
-          ...planRequestReceivedEmail({
-            name: person.name,
-            request,
-            fromPlanName: planName(request.fromPlan),
-            toPlanName: planName(request.toPlan),
-          }),
-        })
-      )
+    await sendEmailToEach(
+      recipients,
+      (person) =>
+        planRequestReceivedEmail({
+          name: person.name,
+          request,
+          fromPlanName: planName(request.fromPlan),
+          toPlanName: planName(request.toPlan),
+        }),
+      "Plan request email failed"
     );
-    outcomes.forEach((o) => o.status === "rejected" && console.error("Plan request email failed:", o.reason?.message));
 
     return res.status(201).json({
       success: true,

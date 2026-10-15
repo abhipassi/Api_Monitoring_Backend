@@ -8,6 +8,7 @@ import CheckResult from "../Models/CheckResult.js";
 import PlanRequest from "../Models/PlanRequest.js";
 import AuditLog from "../Models/AuditLog.js";
 import { PLAN_KEYS, getBillingCurrency, getPlanPrice, pricesAreSample } from "../../config/plans.js";
+import { pageParams, paginationOf } from "../utils/listing.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -73,8 +74,7 @@ export const getPlatformStats = async (req, res, next) => {
 
 export const listAuditLogs = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+    const { page, limit } = pageParams(req.query, 25);
     const filter = {};
 
     if (req.query.targetType) {
@@ -110,7 +110,7 @@ export const listAuditLogs = async (req, res, next) => {
         changes: l.changes ?? {},
         createdAt: l.createdAt,
       })),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: paginationOf(page, limit, total),
     });
   } catch (error) {
     next(error);

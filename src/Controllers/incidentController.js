@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 
 import Incident from "../Models/Incident.js";
+import { badRequest } from "../utils/respond.js";
+import { pageParams, paginationOf } from "../utils/listing.js";
 
 const toIncidentResponse = (incident) => ({
   id: incident._id,
@@ -25,12 +27,9 @@ const toIncidentResponse = (incident) => ({
     : null,
 });
 
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
-
 export const listIncidents = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const { page, limit } = pageParams(req.query);
 
     const filter = { clientId: req.user.clientId };
 
@@ -62,7 +61,7 @@ export const listIncidents = async (req, res, next) => {
       success: true,
       message: "Incidents fetched",
       incidents: incidents.map(toIncidentResponse),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: paginationOf(page, limit, total),
       openCount: open,
     });
   } catch (error) {

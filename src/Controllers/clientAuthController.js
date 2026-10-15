@@ -6,33 +6,34 @@ import generateToken from "../utils/generateToken.js";
 import generatePassword from "../utils/generatePassword.js";
 import sendEmail from "../utils/sendEmail.js";
 import { accountCredentialsEmail } from "../utils/emailTemplates.js";
+import { badRequest } from "../utils/respond.js";
+
+const toUserResponse = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  mustChangePassword: user.mustChangePassword,
+});
+
+const toClientResponse = (client) => ({
+  id: client._id,
+  companyName: client.companyName,
+  plan: client.plan,
+});
 
 export const clientRegister = async (req, res, next) => {
   try {
     const { name, email, companyName } = req.body;
 
-    if (
-      !name?.trim() ||
-      !email?.trim() ||
-      !companyName?.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Name, email and company name are required",
-      });
+    if (!name?.trim() || !email?.trim() || !companyName?.trim()) {
+      return badRequest(res, "Name, email and company name are required");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    const existingUser = await ClientUser.findOne({
-      email: normalizedEmail,
-    });
-
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: "An account with this email already exists",
-      });
+    if (await ClientUser.findOne({ email: normalizedEmail })) {
+      return res.status(409).json({ success: false, message: "An account with this email already exists" });
     }
 
     const password = generatePassword();
@@ -75,12 +76,7 @@ export const clientRegister = async (req, res, next) => {
     try {
       await sendEmail({
         to: clientUser.email,
-        ...accountCredentialsEmail({
-          name: clientUser.name,
-          email: clientUser.email,
-          password,
-          accountLabel: "client",
-        }),
+        ...accountCredentialsEmail({ name: clientUser.name, email: clientUser.email, password, accountLabel: "client" }),
       });
     } catch (mailError) {
       // Nobody would know the password, so undo the account and let them retry
@@ -99,17 +95,8 @@ export const clientRegister = async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: "Account created. Your login details have been sent to your email.",
-      user: {
-        id: clientUser._id,
-        name: clientUser.name,
-        email: clientUser.email,
-        role: clientUser.role,
-      },
-      client: {
-        id: client._id,
-        companyName: client.companyName,
-        plan: client.plan,
-      },
+      user: { id: clientUser._id, name: clientUser.name, email: clientUser.email, role: clientUser.role },
+      client: toClientResponse(client),
     });
   } catch (error) {
     next(error);
@@ -120,16 +107,8 @@ export const clientLogin = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    if (
-      typeof email !== "string" ||
-      !email.trim() ||
-      typeof password !== "string" ||
-      !password
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and password are required",
-      });
+    if (typeof email !== "string" || !email.trim() || typeof password !== "string" || !password) {
+      return badRequest(res, "Email and password are required");
     }
 
     const clientUser = await ClientUser.findOne({
@@ -137,26 +116,13 @@ export const clientLogin = async (req, res, next) => {
       status: "ACTIVE",
     }).select("+passwordHash");
 
-    if (
-      !clientUser ||
-      !(await bcrypt.compare(password, clientUser.passwordHash))
-    ) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password",
-      });
+    if (!clientUser || !(await bcrypt.compare(password, clientUser.passwordHash))) {
+      return res.status(401).json({ success: false, message: "Invalid email or password" });
     }
 
-    const client = await Client.findOne({
-      _id: clientUser.clientId,
-      status: "ACTIVE",
-    });
-
+    const client = await Client.findOne({ _id: clientUser.clientId, status: "ACTIVE" });
     if (!client) {
-      return res.status(403).json({
-        success: false,
-        message: "Client account is unavailable",
-      });
+      return res.status(403).json({ success: false, message: "Client account is unavailable" });
     }
 
     clientUser.lastLoginAt = new Date();
@@ -172,42 +138,18 @@ export const clientLogin = async (req, res, next) => {
       success: true,
       message: "Client login successful",
       token,
-      user: {
-        id: clientUser._id,
-        name: clientUser.name,
-        email: clientUser.email,
-        role: clientUser.role,
-        mustChangePassword: clientUser.mustChangePassword,
-      },
-      client: {
-        id: client._id,
-        companyName: client.companyName,
-        plan: client.plan,
-      },
+      user: toUserResponse(clientUser),
+      client: toClientResponse(client),
     });
   } catch (error) {
     next(error);
   }
 };
 
-export const clientMe = (req, res) => {
-  const clientUser = req.user.doc;
-  const client = req.client;
-
-  return res.status(200).json({
+export const clientMe = (req, res) =>
+  res.status(200).json({
     success: true,
     message: "Profile fetched",
-    user: {
-      id: clientUser._id,
-      name: clientUser.name,
-      email: clientUser.email,
-      role: clientUser.role,
-      mustChangePassword: clientUser.mustChangePassword,
-    },
-    client: {
-      id: client._id,
-      companyName: client.companyName,
-      plan: client.plan,
-    },
+    user: toUserResponse(req.user.doc),
+    client: toClientResponse(req.client),
   });
-};

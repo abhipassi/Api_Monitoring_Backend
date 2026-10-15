@@ -36,4 +36,13 @@ const sendEmail = ({ to, subject, html, text }) =>
     text,
   });
 
+// Emails each person in the list. One failure is logged and doesn't stop the others.
+// buildEmail(person) returns { subject, html, text }.
+export const sendEmailToEach = async (people, buildEmail, failureLabel) => {
+  const outcomes = await Promise.allSettled(people.map((person) => sendEmail({ to: person.email, ...buildEmail(person) })));
+  outcomes.forEach((outcome) => {
+    if (outcome.status === "rejected") console.error(`${failureLabel}:`, outcome.reason?.message);
+  });
+};
+
 export default sendEmail;

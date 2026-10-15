@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import Monitor from "../Models/Monitor.js";
 import CheckResult from "../Models/CheckResult.js";
 import Incident from "../Models/Incident.js";
+import { badRequest } from "../utils/respond.js";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -13,8 +14,6 @@ const RANGES = {
   "7d": { ms: 7 * DAY, bucketMs: HOUR },
   "30d": { ms: 30 * DAY, bucketMs: 6 * HOUR },
 };
-
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
 
 const parseRange = (req) => {
   const key = typeof req.query.range === "string" && req.query.range ? req.query.range : "24h";
@@ -220,39 +219,36 @@ export const getOverview = async (req, res, next) => {
 
     const { clientId } = req.user;
 
-    const [monitors, perMonitorRows, totals, openIncidents] = await Promise.all([
+    const [monitors, perMonitorRows, openIncidents] = await Promise.all([
       Monitor.find({ clientId }).select("name status health.status").sort({ name: 1, _id: 1 }).lean(),
       CheckResult.aggregate([
         { $match: { clientId, checkedAt: { $gte: range.from, $lte: range.to } } },
         { $group: summaryGroup("$monitorId") },
-      ]),
-      CheckResult.aggregate([
-        { $match: { clientId, checkedAt: { $gte: range.from, $lte: range.to } } },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: 1 },
-            successful: { $sum: { $cond: ["$success", 1, 0] } },
-            avg: { $avg: { $cond: ["$success", "$responseTimeMs", null] } },
-          },
-        },
       ]),
       Incident.countDocuments({ clientId, status: "OPEN" }),
     ]);
 
     const stats = new Map(perMonitorRows.map((r) => [String(r._id), r]));
 
+    // Paused monitors are counted as paused; the rest by their last known health
     const counts = { total: monitors.length, active: 0, paused: 0, up: 0, down: 0, unknown: 0 };
     for (const m of monitors) {
-      if (m.status === "PAUSED") counts.paused++;
-      else {
-        counts.active++;
-        const h = (m.health?.status ?? "UNKNOWN").toLowerCase();
-        counts[h]++;
+      if (m.status === "PAUSED") {
+        counts.paused++;
+        continue;
       }
+      counts.active++;
+      counts[(m.health?.status ?? "UNKNOWN").toLowerCase()]++;
     }
 
-    const t = totals[0] ?? { total: 0, successful: 0, avg: null };
+    // Overall totals are the per-monitor rows added together
+    const t = { total: 0, successful: 0, responseTimeSum: 0 };
+    for (const row of perMonitorRows) {
+      t.total += row.total;
+      t.successful += row.successful;
+      t.responseTimeSum += (row.avg ?? 0) * row.successful;
+    }
+    const avgResponseTime = t.successful ? t.responseTimeSum / t.successful : null;
 
     return res.status(200).json({
       success: true,
@@ -265,7 +261,7 @@ export const getOverview = async (req, res, next) => {
         openIncidents,
         checks: { total: t.total, failed: t.total - t.successful },
         uptimePercent: uptimePercent(t.total, t.total - t.successful),
-        avgResponseTimeMs: round(t.avg),
+        avgResponseTimeMs: round(avgResponseTime),
         perMonitor: monitors.map((m) => {
           const s = stats.get(String(m._id));
           const total = s?.total ?? 0;

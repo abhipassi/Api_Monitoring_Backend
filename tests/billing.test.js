@@ -214,7 +214,7 @@ describe("staff deal with requests", () => {
     assert.match(mail.raw, /now on the Starter plan/);
     assert.match(mail.raw, /Welcome aboard/);
 
-    const actions = (await models.AuditLog.find({ actorId: reqMgr.employee._id }).sort({ createdAt: 1 })).map((l) => l.action);
+    const actions = (await models.AuditLog.find({ actorId: reqMgr.employee._id }).sort({ createdAt: 1, _id: 1 })).map((l) => l.action);
     assert.deepEqual(actions, ["client.update", "plan-request.approve"]);
     const page = (await billing(A.token)).body.billing;
     assert.equal(page.plan.key, "STARTER");

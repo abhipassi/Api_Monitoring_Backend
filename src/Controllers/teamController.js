@@ -6,6 +6,7 @@ import { getPlanLimits } from "../../config/plans.js";
 import generatePassword from "../utils/generatePassword.js";
 import sendEmail from "../utils/sendEmail.js";
 import { accountCredentialsEmail } from "../utils/emailTemplates.js";
+import { badRequest } from "../utils/respond.js";
 
 const ROLES = ["OWNER", "MEMBER"];
 const EDITABLE_STATUSES = ["ACTIVE", "DISABLED"];
@@ -23,7 +24,6 @@ const toMemberResponse = (user) => ({
   createdAt: user.createdAt,
 });
 
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
 const notFound = (res) => res.status(404).json({ success: false, message: "Team member not found" });
 
 const seatLimitReached = (res, plan, limits) =>

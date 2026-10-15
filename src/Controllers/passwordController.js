@@ -9,34 +9,32 @@ import {
   passwordResetEmail,
   passwordChangedEmail,
 } from "../utils/emailTemplates.js";
+import { badRequest } from "../utils/respond.js";
 
 const RESET_TOKEN_TTL_MINUTES = 30;
 // Don't send another reset email for the same account within this window
 const RESET_RESEND_COOLDOWN_MS = 60 * 1000;
 
-// The two account types differ only in these details
-const REALMS = {
-  admin: {
-    Model: Employees,
-    passwordField: "password",
-    activeFilter: { status: "ACTIVE", is_deleted: false },
-    resetPath: "/admin/reset-password",
-    tokenPayload: (account) => ({
-      userId: account._id.toString(),
-      type: "admin",
-    }),
-  },
-  client: {
-    Model: ClientUser,
-    passwordField: "passwordHash",
-    activeFilter: { status: "ACTIVE" },
-    resetPath: "/reset-password",
-    tokenPayload: (account) => ({
+// Staff and customers work the same way; only these details differ
+const ADMIN = {
+  Model: Employees,
+  passwordField: "password",
+  activeFilter: { status: "ACTIVE", is_deleted: false },
+  resetPath: "/admin/reset-password",
+  tokenFor: (account) => generateToken({ userId: account._id.toString(), type: "admin" }),
+};
+
+const CLIENT = {
+  Model: ClientUser,
+  passwordField: "passwordHash",
+  activeFilter: { status: "ACTIVE" },
+  resetPath: "/reset-password",
+  tokenFor: (account) =>
+    generateToken({
       userId: account._id.toString(),
       clientId: account.clientId.toString(),
       type: "client",
     }),
-  },
 };
 
 const hashResetToken = (token) =>
@@ -60,9 +58,9 @@ const validateNewPassword = (password) => {
   return null;
 };
 
-// Fields that mark a password as freshly set by its owner
-const passwordSetFields = async (newPassword, passwordField) => ({
-  [passwordField]: await bcrypt.hash(newPassword, 12),
+// The fields to save when someone sets a new password
+const newPasswordFields = async (account, newPassword) => ({
+  [account.passwordField]: await bcrypt.hash(newPassword, 12),
   mustChangePassword: false,
   passwordChangedAt: new Date(),
 });
@@ -78,48 +76,30 @@ const notifyPasswordChanged = (account) =>
     console.error("Password changed email failed:", error.message)
   );
 
-const changePassword = (realm) => async (req, res, next) => {
+const changePassword = (account) => async (req, res, next) => {
   try {
-    const { Model, passwordField, tokenPayload } = realm;
     const { currentPassword, newPassword } = req.body;
 
     if (typeof currentPassword !== "string" || !currentPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "Current password is required",
-      });
+      return badRequest(res, "Current password is required");
     }
+    const problem = validateNewPassword(newPassword);
+    if (problem) return badRequest(res, problem);
 
-    const invalid = validateNewPassword(newPassword);
-    if (invalid) {
-      return res.status(400).json({ success: false, message: invalid });
-    }
-
-    const account = await Model.findById(req.user.id).select(
-      `+${passwordField}`
-    );
+    const user = await account.Model.findById(req.user.id).select(`+${account.passwordField}`);
+    const savedHash = user[account.passwordField];
 
     // 400 rather than 401 so the frontend doesn't treat it as a logged-out session
-    if (!(await bcrypt.compare(currentPassword, account[passwordField]))) {
-      return res.status(400).json({
-        success: false,
-        message: "Current password is incorrect",
-      });
+    if (!(await bcrypt.compare(currentPassword, savedHash))) {
+      return badRequest(res, "Current password is incorrect");
+    }
+    if (await bcrypt.compare(newPassword, savedHash)) {
+      return badRequest(res, "New password must be different from the current password");
     }
 
-    if (await bcrypt.compare(newPassword, account[passwordField])) {
-      return res.status(400).json({
-        success: false,
-        message: "New password must be different from the current password",
-      });
-    }
-
-    const updated = await Model.findByIdAndUpdate(
-      account._id,
-      {
-        $set: await passwordSetFields(newPassword, passwordField),
-        $unset: CLEAR_RESET_TOKEN,
-      },
+    const updated = await account.Model.findByIdAndUpdate(
+      user._id,
+      { $set: await newPasswordFields(account, newPassword), $unset: CLEAR_RESET_TOKEN },
       { returnDocument: "after" }
     );
 
@@ -129,66 +109,51 @@ const changePassword = (realm) => async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Password changed successfully",
-      token: generateToken(tokenPayload(updated)),
+      token: account.tokenFor(updated),
     });
   } catch (error) {
     next(error);
   }
 };
 
-const forgotPassword = (realm) => async (req, res, next) => {
+const forgotPassword = (account) => async (req, res, next) => {
   // Same reply whether or not the account exists, so emails can't be probed
-  const genericReply = {
-    success: true,
-    message: "If an account exists for that email, a password reset link has been sent.",
-  };
+  const sameReply = () =>
+    res.status(200).json({
+      success: true,
+      message: "If an account exists for that email, a password reset link has been sent.",
+    });
 
   try {
-    const { Model, activeFilter, resetPath } = realm;
     const { email } = req.body;
+    if (typeof email !== "string" || !email.trim()) return badRequest(res, "Email is required");
 
-    if (typeof email !== "string" || !email.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is required",
-      });
-    }
-
-    const account = await Model.findOne({
+    const user = await account.Model.findOne({
       email: email.trim().toLowerCase(),
-      ...activeFilter,
+      ...account.activeFilter,
     }).select("+resetPasswordExpires");
+    if (!user) return sameReply();
 
-    if (!account) return res.status(200).json(genericReply);
-
+    // The expiry time tells us when the last link was requested
     const ttlMs = RESET_TOKEN_TTL_MINUTES * 60 * 1000;
-    const lastRequestedAt = account.resetPasswordExpires
-      ? account.resetPasswordExpires.getTime() - ttlMs
-      : 0;
-
-    if (Date.now() - lastRequestedAt < RESET_RESEND_COOLDOWN_MS) {
-      return res.status(200).json(genericReply);
-    }
+    const lastRequestedAt = user.resetPasswordExpires ? user.resetPasswordExpires.getTime() - ttlMs : 0;
+    if (Date.now() - lastRequestedAt < RESET_RESEND_COOLDOWN_MS) return sameReply();
 
     // Only the hash is stored, so a database leak doesn't expose usable links
     const token = crypto.randomBytes(32).toString("hex");
-
-    await Model.updateOne(
-      { _id: account._id },
-      {
-        resetPasswordTokenHash: hashResetToken(token),
-        resetPasswordExpires: new Date(Date.now() + ttlMs),
-      }
+    await account.Model.updateOne(
+      { _id: user._id },
+      { resetPasswordTokenHash: hashResetToken(token), resetPasswordExpires: new Date(Date.now() + ttlMs) }
     );
 
-    const resetUrl = new URL(resetPath, process.env.FRONTEND_URL);
+    const resetUrl = new URL(account.resetPath, process.env.FRONTEND_URL);
     resetUrl.searchParams.set("token", token);
 
     try {
       await sendEmail({
-        to: account.email,
+        to: user.email,
         ...passwordResetEmail({
-          name: account.name,
+          name: user.name,
           resetUrl: resetUrl.toString(),
           expiresInMinutes: RESET_TOKEN_TTL_MINUTES,
         }),
@@ -196,54 +161,36 @@ const forgotPassword = (realm) => async (req, res, next) => {
     } catch (mailError) {
       // Drop the token so the cooldown doesn't block an immediate retry
       console.error("Password reset email failed:", mailError.message);
-      await Model.updateOne({ _id: account._id }, { $unset: CLEAR_RESET_TOKEN });
+      await account.Model.updateOne({ _id: user._id }, { $unset: CLEAR_RESET_TOKEN });
     }
 
-    return res.status(200).json(genericReply);
+    return sameReply();
   } catch (error) {
     next(error);
   }
 };
 
-const resetPassword = (realm) => async (req, res, next) => {
+const resetPassword = (account) => async (req, res, next) => {
   try {
-    const { Model, passwordField, activeFilter } = realm;
     const { token, newPassword } = req.body;
 
-    if (typeof token !== "string" || !token) {
-      return res.status(400).json({
-        success: false,
-        message: "Reset token is required",
-      });
-    }
-
-    const invalid = validateNewPassword(newPassword);
-    if (invalid) {
-      return res.status(400).json({ success: false, message: invalid });
-    }
+    if (typeof token !== "string" || !token) return badRequest(res, "Reset token is required");
+    const problem = validateNewPassword(newPassword);
+    if (problem) return badRequest(res, problem);
 
     // Find-and-update in one step so a link can't be used twice by parallel requests
-    const account = await Model.findOneAndUpdate(
+    const user = await account.Model.findOneAndUpdate(
       {
         resetPasswordTokenHash: hashResetToken(token),
         resetPasswordExpires: { $gt: new Date() },
-        ...activeFilter,
+        ...account.activeFilter,
       },
-      {
-        $set: await passwordSetFields(newPassword, passwordField),
-        $unset: CLEAR_RESET_TOKEN,
-      },
+      { $set: await newPasswordFields(account, newPassword), $unset: CLEAR_RESET_TOKEN },
       { returnDocument: "after" }
     );
+    if (!user) return badRequest(res, "This reset link is invalid or has expired");
 
-    if (!account) {
-      return res.status(400).json({
-        success: false,
-        message: "This reset link is invalid or has expired",
-      });
-    }
-
-    notifyPasswordChanged(account);
+    notifyPasswordChanged(user);
 
     return res.status(200).json({
       success: true,
@@ -254,10 +201,10 @@ const resetPassword = (realm) => async (req, res, next) => {
   }
 };
 
-export const adminChangePassword = changePassword(REALMS.admin);
-export const adminForgotPassword = forgotPassword(REALMS.admin);
-export const adminResetPassword = resetPassword(REALMS.admin);
+export const adminChangePassword = changePassword(ADMIN);
+export const adminForgotPassword = forgotPassword(ADMIN);
+export const adminResetPassword = resetPassword(ADMIN);
 
-export const clientChangePassword = changePassword(REALMS.client);
-export const clientForgotPassword = forgotPassword(REALMS.client);
-export const clientResetPassword = resetPassword(REALMS.client);
+export const clientChangePassword = changePassword(CLIENT);
+export const clientForgotPassword = forgotPassword(CLIENT);
+export const clientResetPassword = resetPassword(CLIENT);

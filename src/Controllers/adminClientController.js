@@ -9,13 +9,13 @@ import { PLAN_KEYS } from "../../config/plans.js";
 import { getUsage, planChangeWarnings, planName } from "../Services/planService.js";
 import { diffChanges, recordAudit } from "../Services/auditService.js";
 import { resyncClientSchedules } from "../Services/monitorQueue.js";
-import sendEmail from "../utils/sendEmail.js";
+import { sendEmailToEach } from "../utils/sendEmail.js";
 import { planChangedEmail } from "../utils/emailTemplates.js";
+import { badRequest } from "../utils/respond.js";
+import { pageParams, paginationOf, searchPattern } from "../utils/listing.js";
 
 export const CLIENT_STATUSES = ["ACTIVE", "SUSPENDED"];
 
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const badRequest = (res, message) => res.status(400).json({ success: false, message });
 const notFound = (res) => res.status(404).json({ success: false, message: "Customer not found" });
 
 const toClientResponse = (client) => ({
@@ -44,8 +44,7 @@ const countsBy = async (Model, field, ids, match = {}) => {
 
 export const listClients = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const { page, limit } = pageParams(req.query);
     const filter = {};
 
     if (req.query.plan) {
@@ -57,7 +56,7 @@ export const listClients = async (req, res, next) => {
       filter.status = req.query.status;
     }
     if (typeof req.query.search === "string" && req.query.search.trim()) {
-      const pattern = new RegExp(escapeRegex(req.query.search.trim().slice(0, 100)), "i");
+      const pattern = searchPattern(req.query.search);
       filter.$or = [{ name: pattern }, { companyName: pattern }, { email: pattern }];
     }
 
@@ -83,7 +82,7 @@ export const listClients = async (req, res, next) => {
         activeUserCount: userCounts.get(String(c._id)) ?? 0,
         hasPendingPlanRequest: pendingIds.has(String(c._id)),
       })),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: paginationOf(page, limit, total),
     });
   } catch (error) {
     next(error);
@@ -180,20 +179,16 @@ export const updateClient = async (req, res, next) => {
 
     if (changed.plan) {
       const owners = await ClientUser.find({ clientId: client._id, role: "OWNER", status: "ACTIVE" }).select("name email").lean();
-      await Promise.allSettled(
-        owners.map((owner) =>
-          sendEmail({
-            to: owner.email,
-            ...planChangedEmail({
-              name: owner.name,
-              clientName: client.companyName || client.name,
-              fromPlanName: planName(before.plan),
-              toPlanName: planName(client.plan),
-            }),
-          })
-        )
-      ).then((outcomes) =>
-        outcomes.forEach((o) => o.status === "rejected" && console.error("Plan change email failed:", o.reason?.message))
+      await sendEmailToEach(
+        owners,
+        (owner) =>
+          planChangedEmail({
+            name: owner.name,
+            clientName: client.companyName || client.name,
+            fromPlanName: planName(before.plan),
+            toPlanName: planName(client.plan),
+          }),
+        "Plan change email failed"
       );
     }
 

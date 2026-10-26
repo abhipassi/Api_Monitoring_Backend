@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import { PLAN_KEYS } from "../../config/plans.js";
 
 const clientSchema = new mongoose.Schema(
   {
@@ -18,9 +17,9 @@ const clientSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    // The key of a Plan (see Models/Plan.js). Checked against the plans when it is set.
     plan: {
       type: String,
-      enum: PLAN_KEYS,
       default: "FREE",
     },
     status: {

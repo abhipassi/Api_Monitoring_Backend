@@ -44,7 +44,7 @@ describe("config for the website (GET /api/meta)", () => {
     const r = await call(api.url, "GET", "/api/meta");
     assert.equal(r.status, 200);
     const m = r.body.meta;
-    assert.deepEqual(m.plans.map((p) => p.key), ["FREE", "STARTER", "ENTERPRISE"]);
+    assert.deepEqual(m.plans.map((p) => p.key).filter((key) => ["FREE", "STARTER", "ENTERPRISE"].includes(key)), ["FREE", "STARTER", "ENTERPRISE"]);
     assert.ok(m.plans.every((p) => p.name && typeof p.priceMonthly === "number" && p.limits.maxMonitors && p.limits.maxTeamMembers));
     assert.equal(m.plans[0].priceMonthly, 0);
     assert.equal(m.currency, "USD");
@@ -56,16 +56,16 @@ describe("config for the website (GET /api/meta)", () => {
     assert.ok(m.permissions.some((p) => p.key === "clients.manage" && p.description));
   });
 
-  test("prices and currency come from .env, not from code", async () => {
+  test("currency, app name and the sample-prices notice come from .env; prices come from the plans", async () => {
     const other = await startApi({
       ...sink.env(), REDIS_URL: DEAD_REDIS,
-      PLAN_PRICE_STARTER: "25", PLAN_PRICE_ENTERPRISE: "not-a-number",
       BILLING_CURRENCY: "inr", PLAN_PRICES_CONFIRMED: "true", APP_NAME: "Watchtower",
     });
     try {
       const m = (await call(other.url, "GET", "/api/meta")).body.meta;
-      assert.equal(m.plans.find((p) => p.key === "STARTER").priceMonthly, 25);
-      assert.equal(m.plans.find((p) => p.key === "ENTERPRISE").priceMonthly, 99, "an invalid price falls back to the default");
+      const stored = await models.Plan.findOne({ key: "STARTER" }).lean();
+      assert.equal(m.plans.find((p) => p.key === "STARTER").priceMonthly, stored.priceMonthly);
+      assert.ok(m.plans.every((p) => p.currency === "INR"));
       assert.equal(m.currency, "INR");
       assert.equal(m.pricesAreSample, false);
       assert.equal(m.appName, "Watchtower");

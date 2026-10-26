@@ -5,8 +5,8 @@ import ClientUser from "../Models/ClientUser.js";
 import Monitor from "../Models/Monitor.js";
 import Incident from "../Models/Incident.js";
 import PlanRequest from "../Models/PlanRequest.js";
-import { PLAN_KEYS } from "../../config/plans.js";
-import { getUsage, planChangeWarnings, planName } from "../Services/planService.js";
+import { getPlans, isActivePlan, planName } from "../Services/planCatalog.js";
+import { getUsage, planChangeWarnings } from "../Services/planService.js";
 import { diffChanges, recordAudit } from "../Services/auditService.js";
 import { resyncClientSchedules } from "../Services/monitorQueue.js";
 import { sendEmailToEach } from "../utils/sendEmail.js";
@@ -48,7 +48,7 @@ export const listClients = async (req, res, next) => {
     const filter = {};
 
     if (req.query.plan) {
-      if (!PLAN_KEYS.includes(req.query.plan)) return badRequest(res, `Plan must be one of ${PLAN_KEYS.join(", ")}`);
+      if (!(await getPlans()).some((p) => p.key === req.query.plan)) return badRequest(res, "Unknown plan");
       filter.plan = req.query.plan;
     }
     if (req.query.status) {
@@ -146,7 +146,8 @@ export const updateClient = async (req, res, next) => {
     const update = {};
 
     if (plan !== undefined) {
-      if (!PLAN_KEYS.includes(plan)) return badRequest(res, `Plan must be one of ${PLAN_KEYS.join(", ")}`);
+      // A customer can stay on an archived plan, but only an available plan can be handed out
+      if (plan !== client.plan && !(await isActivePlan(plan))) return badRequest(res, "Choose one of the available plans");
       update.plan = plan;
     }
     if (status !== undefined) {
@@ -179,14 +180,15 @@ export const updateClient = async (req, res, next) => {
 
     if (changed.plan) {
       const owners = await ClientUser.find({ clientId: client._id, role: "OWNER", status: "ACTIVE" }).select("name email").lean();
+      const [fromName, toName] = await Promise.all([planName(before.plan), planName(client.plan)]);
       await sendEmailToEach(
         owners,
         (owner) =>
           planChangedEmail({
             name: owner.name,
             clientName: client.companyName || client.name,
-            fromPlanName: planName(before.plan),
-            toPlanName: planName(client.plan),
+            fromPlanName: fromName,
+            toPlanName: toName,
           }),
         "Plan change email failed"
       );

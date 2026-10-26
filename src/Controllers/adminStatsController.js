@@ -7,7 +7,8 @@ import Incident from "../Models/Incident.js";
 import CheckResult from "../Models/CheckResult.js";
 import PlanRequest from "../Models/PlanRequest.js";
 import AuditLog from "../Models/AuditLog.js";
-import { PLAN_KEYS, getBillingCurrency, getPlanPrice, pricesAreSample } from "../../config/plans.js";
+import { getBillingCurrency, pricesAreSample } from "../../config/plans.js";
+import { getPlans } from "../Services/planCatalog.js";
 import { pageParams, paginationOf } from "../utils/listing.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -15,7 +16,7 @@ const DAY = 24 * 60 * 60 * 1000;
 export const getPlatformStats = async (req, res, next) => {
   try {
     const now = Date.now();
-    const [byPlanStatus, newClients, users, monitorRows, openIncidents, checks, pendingRequests] = await Promise.all([
+    const [byPlanStatus, newClients, users, monitorRows, openIncidents, checks, pendingRequests, plans] = await Promise.all([
       Client.aggregate([{ $group: { _id: { plan: "$plan", status: "$status" }, count: { $sum: 1 } } }]),
       Client.countDocuments({ createdAt: { $gte: new Date(now - 30 * DAY) } }),
       ClientUser.countDocuments({ status: "ACTIVE" }),
@@ -26,9 +27,11 @@ export const getPlatformStats = async (req, res, next) => {
         { $group: { _id: null, total: { $sum: 1 }, failed: { $sum: { $cond: ["$success", 0, 1] } } } },
       ]),
       PlanRequest.countDocuments({ status: "PENDING" }),
+      getPlans(),
     ]);
 
-    const byPlan = Object.fromEntries(PLAN_KEYS.map((p) => [p, 0]));
+    const priceOf = Object.fromEntries(plans.map((p) => [p.key, p.priceMonthly]));
+    const byPlan = Object.fromEntries(plans.map((p) => [p.key, 0]));
     const byStatus = { ACTIVE: 0, SUSPENDED: 0 };
     let total = 0;
     let monthlyRevenue = 0;
@@ -37,7 +40,7 @@ export const getPlatformStats = async (req, res, next) => {
       byPlan[row._id.plan] = (byPlan[row._id.plan] ?? 0) + row.count;
       byStatus[row._id.status] = (byStatus[row._id.status] ?? 0) + row.count;
       // Suspended customers aren't counted as revenue
-      if (row._id.status === "ACTIVE") monthlyRevenue += getPlanPrice(row._id.plan) * row.count;
+      if (row._id.status === "ACTIVE") monthlyRevenue += (priceOf[row._id.plan] ?? 0) * row.count;
     }
 
     const monitors = { total: 0, active: 0, paused: 0, up: 0, down: 0, unknown: 0 };

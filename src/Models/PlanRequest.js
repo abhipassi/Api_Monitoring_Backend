@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import { PLAN_KEYS } from "../../config/plans.js";
 
 // A customer asking to move to another plan. This is how plans change until a payment
 // provider is connected: staff approve or reject it in the admin area.
@@ -11,8 +10,8 @@ const planRequestSchema = new mongoose.Schema(
     clientName: { type: String, required: true },
     requestedByName: { type: String, required: true },
     requestedByEmail: { type: String, required: true },
-    fromPlan: { type: String, enum: PLAN_KEYS, required: true },
-    toPlan: { type: String, enum: PLAN_KEYS, required: true },
+    fromPlan: { type: String, required: true },
+    toPlan: { type: String, required: true },
     note: { type: String, maxlength: 1000 },
     status: {
       type: String,

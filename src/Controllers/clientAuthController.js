@@ -7,6 +7,7 @@ import generatePassword from "../utils/generatePassword.js";
 import sendEmail from "../utils/sendEmail.js";
 import { accountCredentialsEmail } from "../utils/emailTemplates.js";
 import { badRequest } from "../utils/respond.js";
+import { getDefaultPlan } from "../Services/planCatalog.js";
 
 const toUserResponse = (user) => ({
   id: user._id,
@@ -49,6 +50,7 @@ export const clientRegister = async (req, res, next) => {
         name: name.trim(),
         email: normalizedEmail,
         companyName: companyName.trim(),
+        plan: (await getDefaultPlan()).key,
       });
 
       clientUser = await ClientUser.create({

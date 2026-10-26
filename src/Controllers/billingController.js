@@ -3,28 +3,23 @@ import mongoose from "mongoose";
 import Employees from "../Models/employees.js";
 import ClientUser from "../Models/ClientUser.js";
 import PlanRequest from "../Models/PlanRequest.js";
-import {
-  PLAN_KEYS,
-  getBillingCurrency,
-  getPlanCatalog,
-  getPlanLimits,
-  planRank,
-  pricesAreSample,
-} from "../../config/plans.js";
+import { getBillingCurrency, pricesAreSample } from "../../config/plans.js";
+import { getPlan, getPlanRanks, isActivePlan, planName, toPlanResponse } from "../Services/planCatalog.js";
 import { getBillingProvider } from "../Services/billing/index.js";
-import { getUsage, planChangeWarnings, planName } from "../Services/planService.js";
+import { getUsage, planChangeWarnings } from "../Services/planService.js";
 import { sendEmailToEach } from "../utils/sendEmail.js";
 import { planRequestReceivedEmail } from "../utils/emailTemplates.js";
 import { badRequest } from "../utils/respond.js";
 
-export const toPlanRequestResponse = (r) => ({
+// ranks: from getPlanRanks(); a higher rank is a more expensive plan, so moving up is an upgrade
+export const toPlanRequestResponse = (r, ranks) => ({
   id: r._id,
   clientId: r.clientId,
   clientName: r.clientName,
   requestedBy: { name: r.requestedByName, email: r.requestedByEmail },
   fromPlan: r.fromPlan,
   toPlan: r.toPlan,
-  direction: planRank(r.toPlan) > planRank(r.fromPlan) ? "UPGRADE" : "DOWNGRADE",
+  direction: ranks.get(r.toPlan) > ranks.get(r.fromPlan) ? "UPGRADE" : "DOWNGRADE",
   note: r.note ?? null,
   status: r.status,
   decidedByName: r.decidedByName ?? null,
@@ -38,18 +33,19 @@ export const getBilling = async (req, res, next) => {
     const { client } = req;
     const provider = getBillingProvider();
 
-    const [usage, requests] = await Promise.all([
+    const [usage, requests, ranks, current] = await Promise.all([
       getUsage(client._id, client.plan),
       PlanRequest.find({ clientId: client._id }).sort({ createdAt: -1 }).limit(10).lean(),
+      getPlanRanks(),
+      getPlan(client.plan),
     ]);
-    const current = getPlanCatalog().find((p) => p.key === client.plan);
     const pending = requests.find((r) => r.status === "PENDING");
 
     return res.status(200).json({
       success: true,
       message: "Billing fetched",
       billing: {
-        plan: { ...current, limits: getPlanLimits(client.plan) },
+        plan: toPlanResponse(current),
         usage,
         subscription: {
           provider: client.subscription?.provider ?? "none",
@@ -60,8 +56,8 @@ export const getBilling = async (req, res, next) => {
         paymentsEnabled: provider.enabled,
         currency: getBillingCurrency(),
         pricesAreSample: pricesAreSample(),
-        pendingRequest: pending ? toPlanRequestResponse(pending) : null,
-        recentRequests: requests.map(toPlanRequestResponse),
+        pendingRequest: pending ? toPlanRequestResponse(pending, ranks) : null,
+        recentRequests: requests.map((r) => toPlanRequestResponse(r, ranks)),
       },
     });
   } catch (error) {
@@ -88,7 +84,7 @@ export const createPlanRequest = async (req, res, next) => {
     const { client } = req;
     const { plan, note } = req.body;
 
-    if (!PLAN_KEYS.includes(plan)) return badRequest(res, `Plan must be one of ${PLAN_KEYS.join(", ")}`);
+    if (!(await isActivePlan(plan))) return badRequest(res, "Choose one of the available plans");
     if (plan === client.plan) return badRequest(res, "You are already on this plan");
     if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) {
       return badRequest(res, "Note must be text of at most 1000 characters");
@@ -120,14 +116,15 @@ export const createPlanRequest = async (req, res, next) => {
     }
 
     const recipients = await staffRecipients();
+    const [fromName, toName, ranks] = await Promise.all([planName(request.fromPlan), planName(request.toPlan), getPlanRanks()]);
     await sendEmailToEach(
       recipients,
       (person) =>
         planRequestReceivedEmail({
           name: person.name,
           request,
-          fromPlanName: planName(request.fromPlan),
-          toPlanName: planName(request.toPlan),
+          fromPlanName: fromName,
+          toPlanName: toName,
         }),
       "Plan request email failed"
     );
@@ -135,8 +132,8 @@ export const createPlanRequest = async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: "Plan request sent. Our team will review it shortly.",
-      request: toPlanRequestResponse(request),
-      warnings: planRank(plan) < planRank(client.plan) ? await planChangeWarnings(client._id, plan) : [],
+      request: toPlanRequestResponse(request, ranks),
+      warnings: ranks.get(plan) < ranks.get(client.plan) ? await planChangeWarnings(client._id, plan) : [],
     });
   } catch (error) {
     next(error);
@@ -157,7 +154,7 @@ export const cancelPlanRequest = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "No waiting plan request found" });
     }
 
-    return res.status(200).json({ success: true, message: "Plan request canceled", request: toPlanRequestResponse(request) });
+    return res.status(200).json({ success: true, message: "Plan request canceled", request: toPlanRequestResponse(request, await getPlanRanks()) });
   } catch (error) {
     next(error);
   }
@@ -177,7 +174,7 @@ export const createCheckout = async (req, res, next) => {
     }
 
     const { plan } = req.body;
-    if (!PLAN_KEYS.includes(plan) || plan === req.client.plan) return badRequest(res, "Choose a different plan");
+    if (!(await isActivePlan(plan)) || plan === req.client.plan) return badRequest(res, "Choose a different plan");
 
     const base = process.env.FRONTEND_URL;
     const session = await provider.createCheckoutSession({

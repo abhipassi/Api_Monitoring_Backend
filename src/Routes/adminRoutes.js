@@ -5,6 +5,7 @@ import {
     approvePlanRequest,
     rejectPlanRequest,
 } from '../Controllers/adminPlanRequestController.js'
+import { createPlan, listPlans, updatePlan } from '../Controllers/adminPlanController.js'
 import { getPlatformStats, listAuditLogs } from '../Controllers/adminStatsController.js'
 import { getMeta } from '../Controllers/metaController.js'
 import { protect, requirePermission } from '../Middlewares/auth.middleware.js'
@@ -25,6 +26,10 @@ router.patch('/clients/:id', requirePermission('clients.manage'), updateClient)
 router.get('/plan-requests', requirePermission('plan-requests.manage'), listPlanRequests)
 router.post('/plan-requests/:id/approve', requirePermission('plan-requests.manage'), approvePlanRequest)
 router.post('/plan-requests/:id/reject', requirePermission('plan-requests.manage'), rejectPlanRequest)
+
+router.get('/plans', requirePermission('plans.manage'), listPlans)
+router.post('/plans', requirePermission('plans.manage'), createPlan)
+router.patch('/plans/:key', requirePermission('plans.manage'), updatePlan)
 
 router.get('/audit-logs', requirePermission('audit.read'), listAuditLogs)
 

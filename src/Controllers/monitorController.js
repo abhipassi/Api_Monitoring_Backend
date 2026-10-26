@@ -4,7 +4,7 @@ import Monitor from "../Models/Monitor.js";
 import CheckResult from "../Models/CheckResult.js";
 import { removeMonitorSchedule, syncMonitorSchedule } from "../Services/monitorQueue.js";
 import { closeOpenIncident, deleteIncidentsForMonitor } from "../Services/incidentService.js";
-import { getPlanLimits } from "../../config/plans.js";
+import { getPlanLimits } from "../Services/planCatalog.js";
 import { validateMonitorInput } from "../utils/validateMonitorInput.js";
 import { pageParams, paginationOf, searchPattern } from "../utils/listing.js";
 
@@ -33,8 +33,8 @@ const toMonitorResponse = (monitor) => ({
   updatedAt: monitor.updatedAt,
 });
 
-const toUsage = (client, used) => {
-  const limits = getPlanLimits(client.plan);
+const toUsage = async (client, used) => {
+  const limits = await getPlanLimits(client.plan);
   return {
     plan: client.plan,
     used,
@@ -65,7 +65,7 @@ const findOwned = (req) => {
 
 export const createMonitor = async (req, res, next) => {
   try {
-    const limits = getPlanLimits(req.client.plan);
+    const limits = await getPlanLimits(req.client.plan);
     const { clientId } = req.user;
 
     const result = validateMonitorInput(req.body, { plan: limits });
@@ -137,7 +137,7 @@ export const listMonitors = async (req, res, next) => {
       message: "Monitors fetched",
       monitors: monitors.map(toMonitorResponse),
       pagination: paginationOf(page, limit, total),
-      usage: toUsage(req.client, used),
+      usage: await toUsage(req.client, used),
     });
   } catch (error) {
     next(error);
@@ -165,7 +165,7 @@ export const updateMonitor = async (req, res, next) => {
     if (!monitor) return notFound(res);
 
     const result = validateMonitorInput(req.body, {
-      plan: getPlanLimits(req.client.plan),
+      plan: await getPlanLimits(req.client.plan),
       existing: monitor,
     });
     if (result.errors) return badRequest(res, result.errors);

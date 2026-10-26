@@ -7,6 +7,8 @@ import connectDB from "./config/db.js";
 import { createMonitorWorker } from "./src/Services/monitorWorker.js";
 import { closeQueue, reconcileSchedules } from "./src/Services/monitorQueue.js";
 import { sendPendingNotifications } from "./src/Services/incidentService.js";
+import { ensureDefaultPlans } from "./src/Services/planCatalog.js";
+import { dropGlobalResultExpiry, purgeExpiredResults } from "./src/Services/retentionService.js";
 
 const concurrency = Number(process.env.WORKER_CONCURRENCY) || 20;
 const reconcileEveryMs = (Number(process.env.RECONCILE_INTERVAL_MINUTES) || 10) * 60 * 1000;
@@ -22,6 +24,8 @@ const reconcile = async () => {
 
 const start = async () => {
     await connectDB();
+    await ensureDefaultPlans();
+    await dropGlobalResultExpiry();
 
     const worker = createMonitorWorker({ concurrency });
     console.log(`Monitor worker started (concurrency ${concurrency})`);
@@ -42,6 +46,18 @@ const start = async () => {
     };
     const notifyTimer = setInterval(retryNotifications, 2 * 60 * 1000);
 
+    // Deletes check history older than each plan keeps
+    const purgeHistory = async () => {
+        try {
+            const deleted = await purgeExpiredResults();
+            if (deleted) console.log(`Purged ${deleted} expired check results`);
+        } catch (error) {
+            console.error("Purging old check results failed:", error.message);
+        }
+    };
+    await purgeHistory();
+    const purgeTimer = setInterval(purgeHistory, 60 * 60 * 1000);
+
     let stopping = false;
     const shutdown = async (signal) => {
         if (stopping) return;
@@ -49,6 +65,7 @@ const start = async () => {
         console.log(`${signal} received, finishing running checks...`);
         clearInterval(timer);
         clearInterval(notifyTimer);
+        clearInterval(purgeTimer);
         try {
             await worker.close(); // waits for in-flight jobs
             await closeQueue();

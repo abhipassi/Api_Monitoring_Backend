@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 
 import ClientUser from "../Models/ClientUser.js";
-import { getPlanLimits } from "../../config/plans.js";
+import { getPlanLimits } from "../Services/planCatalog.js";
 import generatePassword from "../utils/generatePassword.js";
 import sendEmail from "../utils/sendEmail.js";
 import { accountCredentialsEmail } from "../utils/emailTemplates.js";
@@ -36,8 +36,8 @@ const seatLimitReached = (res, plan, limits) =>
 // Seats are the people who can log in; disabled members don't take one
 const countSeats = (clientId) => ClientUser.countDocuments({ clientId, status: "ACTIVE" });
 
-const usageFor = (client, used) => {
-  const limits = getPlanLimits(client.plan);
+const usageFor = async (client, used) => {
+  const limits = await getPlanLimits(client.plan);
   return { plan: client.plan, used, max: limits.maxTeamMembers };
 };
 
@@ -59,7 +59,7 @@ export const listTeam = async (req, res, next) => {
       success: true,
       message: "Team fetched",
       members: members.map(toMemberResponse),
-      seats: usageFor(req.client, seats),
+      seats: await usageFor(req.client, seats),
     });
   } catch (error) {
     next(error);
@@ -69,7 +69,7 @@ export const listTeam = async (req, res, next) => {
 export const addTeamMember = async (req, res, next) => {
   try {
     const { clientId } = req.user;
-    const limits = getPlanLimits(req.client.plan);
+    const limits = await getPlanLimits(req.client.plan);
     const { name, email, role = "MEMBER" } = req.body;
 
     if (typeof name !== "string" || !name.trim() || typeof email !== "string" || !email.trim()) {
@@ -191,7 +191,7 @@ export const updateTeamMember = async (req, res, next) => {
 
     // Turning someone back on uses a seat again
     if (update.status === "ACTIVE" && member.status !== "ACTIVE") {
-      const limits = getPlanLimits(req.client.plan);
+      const limits = await getPlanLimits(req.client.plan);
       if ((await countSeats(clientId)) >= limits.maxTeamMembers) {
         return seatLimitReached(res, req.client.plan, limits);
       }

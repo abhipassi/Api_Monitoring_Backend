@@ -3,7 +3,7 @@ import IORedis from "ioredis";
 
 import Monitor from "../Models/Monitor.js";
 import Client from "../Models/clients.js";
-import { getPlanLimits } from "../../config/plans.js";
+import { getPlanLimits } from "./planCatalog.js";
 
 // One repeating BullMQ job scheduler per ACTIVE monitor, with the monitor id as the
 // scheduler id. A job carries only { monitorId }; the worker reads the current settings
@@ -61,13 +61,12 @@ export const closeQueue = async () => {
 };
 
 // A plan downgrade must not leave a monitor checking faster than the plan now allows
-export const effectiveIntervalSeconds = (monitor, plan) =>
-  Math.max(monitor.intervalSeconds, getPlanLimits(plan).minIntervalSeconds);
+export const effectiveIntervalSeconds = (monitor, limits) => Math.max(monitor.intervalSeconds, limits.minIntervalSeconds);
 
-const scheduleInput = (monitor, plan) => [
+const scheduleInput = (monitor, limits) => [
   String(monitor._id),
   // The first check runs straight away, then every `every` ms
-  { every: effectiveIntervalSeconds(monitor, plan) * 1000 },
+  { every: effectiveIntervalSeconds(monitor, limits) * 1000 },
   {
     name: JOB_NAME,
     data: { monitorId: String(monitor._id) },
@@ -76,8 +75,7 @@ const scheduleInput = (monitor, plan) => [
   },
 ];
 
-export const scheduleMonitor = (monitor, plan) =>
-  getQueue().upsertJobScheduler(...scheduleInput(monitor, plan));
+export const scheduleMonitor = (monitor, limits) => getQueue().upsertJobScheduler(...scheduleInput(monitor, limits));
 
 export const unscheduleMonitor = (monitorId) => getQueue().removeJobScheduler(String(monitorId));
 
@@ -102,8 +100,9 @@ const callRedis = (fn, timeoutMs = REDIS_CALL_TIMEOUT_MS) => {
 // MongoDB already has the change, and reconcileSchedules() fixes the timetable later.
 export const syncMonitorSchedule = async (monitor, plan) => {
   try {
+    const limits = await getPlanLimits(plan);
     await callRedis(() =>
-      monitor.status === "ACTIVE" ? scheduleMonitor(monitor, plan) : unscheduleMonitor(monitor._id)
+      monitor.status === "ACTIVE" ? scheduleMonitor(monitor, limits) : unscheduleMonitor(monitor._id)
     );
     return true;
   } catch (error) {
@@ -143,6 +142,10 @@ export const reconcileSchedules = async () => {
     (await Client.find({ status: "ACTIVE" }).select("plan").lean()).map((c) => [String(c._id), c.plan])
   );
 
+  // Look the limits up once per pass, not once per monitor
+  const limitsByPlan = new Map();
+  for (const plan of new Set(clients.values())) limitsByPlan.set(plan, await getPlanLimits(plan));
+
   const wanted = new Map();
   const cursor = Monitor.find({ status: "ACTIVE" }).select("clientId intervalSeconds").lean().cursor();
   for await (const monitor of cursor) {
@@ -152,13 +155,13 @@ export const reconcileSchedules = async () => {
 
   const toUpsert = [];
   for (const [id, monitor] of wanted) {
-    const plan = clients.get(String(monitor.clientId));
-    const every = effectiveIntervalSeconds(monitor, plan) * 1000;
-    if (existing.get(id) !== every) toUpsert.push([monitor, plan, existing.has(id)]);
+    const limits = limitsByPlan.get(clients.get(String(monitor.clientId)));
+    const every = effectiveIntervalSeconds(monitor, limits) * 1000;
+    if (existing.get(id) !== every) toUpsert.push([monitor, limits, existing.has(id)]);
   }
   const toRemove = [...existing.keys()].filter((id) => !wanted.has(id));
 
-  await inChunks(toUpsert, 100, ([monitor, plan]) => scheduleMonitor(monitor, plan));
+  await inChunks(toUpsert, 100, ([monitor, limits]) => scheduleMonitor(monitor, limits));
   await inChunks(toRemove, 100, (id) => q.removeJobScheduler(id));
 
   return {
@@ -175,6 +178,7 @@ export const resyncClientSchedules = async (clientId) => {
   try {
     const client = await Client.findById(clientId).select("plan status").lean();
     const monitors = await Monitor.find({ clientId }).select("clientId intervalSeconds status").lean();
+    const limits = client ? await getPlanLimits(client.plan) : null;
 
     await callRedis(async () => {
       const q = getQueue();
@@ -184,10 +188,10 @@ export const resyncClientSchedules = async (clientId) => {
           await q.removeJobScheduler(id);
           return;
         }
-        const every = effectiveIntervalSeconds(monitor, client.plan) * 1000;
+        const every = effectiveIntervalSeconds(monitor, limits) * 1000;
         const existing = await q.getJobScheduler(id);
         // Leave correct schedulers alone so their timing isn't disturbed
-        if (existing?.every !== every) await scheduleMonitor(monitor, client.plan);
+        if (existing?.every !== every) await scheduleMonitor(monitor, limits);
       });
     }, 60 * 1000); // a client can have hundreds of monitors
     return true;
@@ -195,4 +199,12 @@ export const resyncClientSchedules = async (clientId) => {
     console.error(`Could not resync schedules for client ${clientId}:`, error.message);
     return false;
   }
+};
+
+// After staff change a plan's limits: update the schedules of everyone on that plan now
+export const resyncPlanSchedules = async (planKey) => {
+  const clients = await Client.find({ plan: planKey }).select("_id").lean();
+  let ok = true;
+  for (const client of clients) ok = (await resyncClientSchedules(client._id)) && ok;
+  return ok;
 };

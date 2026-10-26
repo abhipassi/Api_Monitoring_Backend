@@ -1,12 +1,11 @@
 import Monitor from "../Models/Monitor.js";
+import Client from "../Models/clients.js";
 import ClientUser from "../Models/ClientUser.js";
-import { getPlanCatalog, getPlanLimits } from "../../config/plans.js";
-
-export const planName = (key) => getPlanCatalog().find((p) => p.key === key)?.name ?? key;
+import { getPlanLimits, planName } from "./planCatalog.js";
 
 // What a client uses today against what its plan allows
 export const getUsage = async (clientId, plan) => {
-  const limits = getPlanLimits(plan);
+  const limits = await getPlanLimits(plan);
   const [monitors, teamMembers] = await Promise.all([
     Monitor.countDocuments({ clientId }),
     ClientUser.countDocuments({ clientId, status: "ACTIVE" }),
@@ -20,8 +19,8 @@ export const getUsage = async (clientId, plan) => {
 // Plain-language notes about what would not fit on a plan. Nothing is deleted or switched off
 // when a plan shrinks; these tell staff and owners what to expect.
 export const planChangeWarnings = async (clientId, newPlanKey) => {
-  const limits = getPlanLimits(newPlanKey);
-  const name = planName(newPlanKey);
+  const limits = await getPlanLimits(newPlanKey);
+  const name = await planName(newPlanKey);
   const usage = await getUsage(clientId, newPlanKey);
   const warnings = [];
 
@@ -44,4 +43,29 @@ export const planChangeWarnings = async (clientId, newPlanKey) => {
   }
 
   return warnings;
+};
+
+// How many customers on a plan are over (or beyond) its current limits. Shown to staff after a plan
+// is edited, because nothing is deleted or switched off: it only tells them what to expect.
+export const planImpact = async (planKey) => {
+  const limits = await getPlanLimits(planKey);
+  const clientIds = (await Client.find({ plan: planKey }).select("_id").lean()).map((c) => c._id);
+
+  const over = async (Model, match, max) => {
+    const rows = await Model.aggregate([
+      { $match: { clientId: { $in: clientIds }, ...match } },
+      { $group: { _id: "$clientId", count: { $sum: 1 } } },
+      { $match: { count: { $gt: max } } },
+      { $count: "n" },
+    ]);
+    return rows[0]?.n ?? 0;
+  };
+
+  const [overMonitorLimit, overSeatLimit, tooFastMonitors] = await Promise.all([
+    over(Monitor, {}, limits.maxMonitors),
+    over(ClientUser, { status: "ACTIVE" }, limits.maxTeamMembers),
+    Monitor.countDocuments({ clientId: { $in: clientIds }, intervalSeconds: { $lt: limits.minIntervalSeconds } }),
+  ]);
+
+  return { customers: clientIds.length, overMonitorLimit, overSeatLimit, tooFastMonitors };
 };

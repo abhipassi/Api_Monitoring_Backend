@@ -1,58 +1,47 @@
-// The plan catalog: limits and prices for each Client.plan. The website reads this through
-// GET /api/meta, so nothing about plans is repeated in the frontend.
+// The starting plans, written to the database the first time the API or worker starts with no
+// plans. After that, plans are edited by staff in the admin area and this file is not used.
+//
+// PLAN_PRICE_STARTER / PLAN_PRICE_ENTERPRISE in .env only set the first prices.
+// RESULT_RETENTION_DAYS only sets the first retention.
 
-// Prices are placeholders until you decide them. Set PLAN_PRICE_STARTER / PLAN_PRICE_ENTERPRISE
-// and BILLING_CURRENCY in .env, then PLAN_PRICES_CONFIRMED=true to hide the "sample pricing" notice.
 const SAMPLE_PRICES = { FREE: 0, STARTER: 19, ENTERPRISE: 99 };
 
-const priceFor = (plan) => {
-  const raw = process.env[`PLAN_PRICE_${plan}`];
+const firstPrice = (key) => {
+  const raw = process.env[`PLAN_PRICE_${key}`];
   const value = raw === undefined || raw === "" ? NaN : Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : SAMPLE_PRICES[plan];
+  return Number.isFinite(value) && value >= 0 ? value : SAMPLE_PRICES[key];
 };
 
-// Listed from lowest to highest; a plan's position is its rank (used to tell upgrades from downgrades)
-const PLAN_DEFINITIONS = [
-  {
-    key: "FREE",
-    name: "Free",
-    limits: { maxMonitors: 5, minIntervalSeconds: 300, maxTimeoutSeconds: 30, maxTeamMembers: 2 },
-  },
-  {
-    key: "STARTER",
-    name: "Starter",
-    limits: { maxMonitors: 50, minIntervalSeconds: 60, maxTimeoutSeconds: 30, maxTeamMembers: 10 },
-  },
-  {
-    key: "ENTERPRISE",
-    name: "Enterprise",
-    limits: { maxMonitors: 500, minIntervalSeconds: 30, maxTimeoutSeconds: 60, maxTeamMembers: 100 },
-  },
-];
+export const seedPlans = () => {
+  const retentionDays = Number(process.env.RESULT_RETENTION_DAYS) || 30;
+  const plan = (key, name, sortOrder, limits, extra = {}) => ({
+    key,
+    name,
+    sortOrder,
+    priceMonthly: firstPrice(key),
+    limits: { ...limits, retentionDays },
+    ...extra,
+  });
 
-export const PLAN_KEYS = PLAN_DEFINITIONS.map((p) => p.key);
-
-export const PLAN_LIMITS = Object.fromEntries(PLAN_DEFINITIONS.map((p) => [p.key, p.limits]));
+  return [
+    plan("FREE", "Free", 0, { maxMonitors: 5, minIntervalSeconds: 300, maxTimeoutSeconds: 30, maxTeamMembers: 2 }, { isDefault: true }),
+    plan("STARTER", "Starter", 1, { maxMonitors: 50, minIntervalSeconds: 60, maxTimeoutSeconds: 30, maxTeamMembers: 10 }),
+    plan("ENTERPRISE", "Enterprise", 2, { maxMonitors: 500, minIntervalSeconds: 30, maxTimeoutSeconds: 60, maxTeamMembers: 100 }),
+  ];
+};
 
 // No plan can check less often than once a day
 export const MAX_INTERVAL_SECONDS = 24 * 60 * 60;
 
-export const getPlanLimits = (plan) => PLAN_LIMITS[plan] || PLAN_LIMITS.FREE;
-
-export const planRank = (plan) => PLAN_KEYS.indexOf(plan);
+// The whole-number range allowed for each limit when staff edit a plan (also sent to the website)
+export const PLAN_LIMIT_RANGES = {
+  maxMonitors: { min: 1, max: 100000 },
+  minIntervalSeconds: { min: 5, max: MAX_INTERVAL_SECONDS },
+  maxTimeoutSeconds: { min: 1, max: 300 },
+  maxTeamMembers: { min: 1, max: 100000 },
+  retentionDays: { min: 1, max: 365 },
+};
 
 export const getBillingCurrency = () => (process.env.BILLING_CURRENCY || "USD").toUpperCase();
 
 export const pricesAreSample = () => process.env.PLAN_PRICES_CONFIRMED !== "true";
-
-// Read per call, so prices changed in .env show up after a restart without code changes
-export const getPlanCatalog = () =>
-  PLAN_DEFINITIONS.map((p) => ({
-    key: p.key,
-    name: p.name,
-    priceMonthly: priceFor(p.key),
-    currency: getBillingCurrency(),
-    limits: PLAN_LIMITS[p.key],
-  }));
-
-export const getPlanPrice = (plan) => (PLAN_KEYS.includes(plan) ? priceFor(plan) : 0);

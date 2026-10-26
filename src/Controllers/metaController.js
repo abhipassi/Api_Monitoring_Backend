@@ -1,10 +1,6 @@
 import { HTTP_METHODS } from "../Models/Monitor.js";
-import {
-  MAX_INTERVAL_SECONDS,
-  getBillingCurrency,
-  getPlanCatalog,
-  pricesAreSample,
-} from "../../config/plans.js";
+import { MAX_INTERVAL_SECONDS, PLAN_LIMIT_RANGES, getBillingCurrency, pricesAreSample } from "../../config/plans.js";
+import { getPlans, toPlanResponse } from "../Services/planCatalog.js";
 import { PERMISSIONS } from "../../config/permissions.js";
 import { CHECK_ERROR_TYPES } from "../Services/monitorCheckService.js";
 import { getBillingProvider } from "../Services/billing/index.js";
@@ -18,13 +14,17 @@ import {
 
 // Everything the website would otherwise have to hard-code: plans, prices, allowed values, limits.
 // Public, because the login and pricing screens need it before anyone is signed in. No secrets here.
-export const getMeta = (req, res) =>
-  res.status(200).json({
+export const getMeta = async (req, res, next) => {
+  try {
+    const plans = (await getPlans()).map(toPlanResponse);
+
+    return res.status(200).json({
     success: true,
     message: "Meta fetched",
     meta: {
       appName: process.env.APP_NAME || "API Monitoring",
-      plans: getPlanCatalog(),
+      // Archived plans are included so names can be shown for customers still on them; each has isActive
+      plans,
       currency: getBillingCurrency(),
       pricesAreSample: pricesAreSample(),
       paymentsEnabled: getBillingProvider().enabled,
@@ -44,6 +44,7 @@ export const getMeta = (req, res) =>
       },
       limits: {
         maxIntervalSeconds: MAX_INTERVAL_SECONDS,
+        planLimits: PLAN_LIMIT_RANGES,
         maxHeaders: MAX_HEADERS,
         maxNameLength: MAX_NAME_LENGTH,
         maxBodyLength: MAX_BODY_LENGTH,
@@ -53,3 +54,7 @@ export const getMeta = (req, res) =>
       permissions: Object.entries(PERMISSIONS).map(([key, description]) => ({ key, description })),
     },
   });
+  } catch (error) {
+    next(error);
+  }
+};

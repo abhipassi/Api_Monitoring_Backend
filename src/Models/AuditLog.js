@@ -8,7 +8,7 @@ const auditLogSchema = new mongoose.Schema({
   actorName: { type: String, required: true },
   actorEmail: { type: String, required: true },
   action: { type: String, required: true },
-  targetType: { type: String, enum: ["CLIENT", "EMPLOYEE", "PLAN_REQUEST"], required: true },
+  targetType: { type: String, enum: ["CLIENT", "EMPLOYEE", "PLAN_REQUEST", "PLAN"], required: true },
   targetId: { type: mongoose.Schema.Types.ObjectId, required: true },
   targetLabel: { type: String },
   // { field: { from, to } }

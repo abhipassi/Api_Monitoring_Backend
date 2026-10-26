@@ -2,6 +2,8 @@ import net from "net";
 import path from "path";
 import { spawn } from "child_process";
 
+import "./testEnv.js";
+
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
 const freePort = () =>

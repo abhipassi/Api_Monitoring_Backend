@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 import Client from "../Models/clients.js";
 import ClientUser from "../Models/ClientUser.js";
 import PlanRequest from "../Models/PlanRequest.js";
-import { planChangeWarnings, planName } from "../Services/planService.js";
+import { planChangeWarnings } from "../Services/planService.js";
+import { getPlanRanks, isActivePlan, planName } from "../Services/planCatalog.js";
 import { recordAudit } from "../Services/auditService.js";
 import { resyncClientSchedules } from "../Services/monitorQueue.js";
 import { sendEmailToEach } from "../utils/sendEmail.js";
@@ -28,16 +29,17 @@ export const listPlanRequests = async (req, res, next) => {
       filter.clientId = req.query.clientId;
     }
 
-    const [requests, total, pending] = await Promise.all([
+    const [requests, total, pending, ranks] = await Promise.all([
       PlanRequest.find(filter).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       PlanRequest.countDocuments(filter),
       PlanRequest.countDocuments({ status: "PENDING" }),
+      getPlanRanks(),
     ]);
 
     return res.status(200).json({
       success: true,
       message: "Plan requests fetched",
-      requests: requests.map(toPlanRequestResponse),
+      requests: requests.map((r) => toPlanRequestResponse(r, ranks)),
       pagination: paginationOf(page, limit, total),
       pendingCount: pending,
     });
@@ -55,6 +57,14 @@ const decide = (approved) => async (req, res, next) => {
     const { note } = req.body;
     if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) {
       return badRequest(res, "Note must be text of at most 1000 characters");
+    }
+
+    // A plan archived since the request was sent can't be handed out any more
+    if (approved) {
+      const waiting = await PlanRequest.findOne({ _id: req.params.id, status: "PENDING" }).select("toPlan").lean();
+      if (waiting && !(await isActivePlan(waiting.toPlan))) {
+        return badRequest(res, "That plan is no longer available. Reject the request, or ask the customer to choose another plan.");
+      }
     }
 
     const actor = req.user.doc;
@@ -108,6 +118,7 @@ const decide = (approved) => async (req, res, next) => {
     });
 
     const owners = await ClientUser.find({ clientId: request.clientId, role: "OWNER", status: "ACTIVE" }).select("name email").lean();
+    const [fromName, toName, ranks] = await Promise.all([planName(request.fromPlan), planName(request.toPlan), getPlanRanks()]);
     await sendEmailToEach(
       owners,
       (owner) =>
@@ -115,8 +126,8 @@ const decide = (approved) => async (req, res, next) => {
           name: owner.name,
           request,
           approved,
-          fromPlanName: planName(request.fromPlan),
-          toPlanName: planName(request.toPlan),
+          fromPlanName: fromName,
+          toPlanName: toName,
         }),
       "Plan decision email failed"
     );
@@ -124,7 +135,7 @@ const decide = (approved) => async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: approved ? "Request approved and the plan was changed" : "Request rejected",
-      request: toPlanRequestResponse(request),
+      request: toPlanRequestResponse(request, ranks),
       warnings,
     });
   } catch (error) {

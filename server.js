@@ -9,6 +9,8 @@ import { errorHandler, notFound } from "./src/Middlewares/error.middleware.js";
 import connectDB from "./config/db.js";
 import routes from "./src/Routes/index.js";
 import { getQueue } from "./src/Services/monitorQueue.js";
+import { ensureDefaultPlans } from "./src/Services/planCatalog.js";
+import { dropGlobalResultExpiry } from "./src/Services/retentionService.js";
 
 const app = express();
 
@@ -66,6 +68,8 @@ app.use(errorHandler);
 const startServer = async () => {
     try {
         await connectDB();
+        await ensureDefaultPlans();
+        await dropGlobalResultExpiry();
 
         // Connect to Redis now so the first monitor created after a restart can be scheduled.
         // The API still starts without it: monitors are saved and scheduled once Redis is back.

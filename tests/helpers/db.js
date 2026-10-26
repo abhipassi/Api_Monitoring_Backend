@@ -1,11 +1,9 @@
 import path from "path";
 import bcrypt from "bcryptjs";
-import dotenv from "dotenv";
 import mongoose from "mongoose";
 
+import "./testEnv.js";
 import { call } from "./app.js";
-
-dotenv.config({ path: path.resolve(import.meta.dirname, "../../.env"), quiet: true });
 
 const src = (file) => import(path.resolve(import.meta.dirname, "../../src/Models", file));
 
@@ -21,6 +19,7 @@ export const connectDb = async () => {
   models.Incident = (await src("Incident.js")).default;
   models.PlanRequest = (await src("PlanRequest.js")).default;
   models.AuditLog = (await src("AuditLog.js")).default;
+  models.Plan = (await src("Plan.js")).default;
   return models;
 };
 
